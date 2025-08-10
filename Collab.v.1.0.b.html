@@ -2108,7 +2108,7 @@
 
           // --- Initialization ---
           loadSettings(); // Load initial settings (from memory/localStorage, ensures defaults)
-          displayMessage("Welcome! I am the AI Team Leader. Enter your problem, and my team and I will work on it. Check or configure the API Key and Agent settings via the <i class='fas fa-cog'></i> button.", "leader");
+displayMessage("Welcome! I am the AI Team Leader. Enter your problem, and my team and I will work on it. Check or configure the API Key and Agent settings via the Settings button.", "leader");
            // Initial API key check - show non-blocking info toast
            if (!settings.api_keys.google || settings.api_keys.google === "YOUR_API_KEY" || settings.api_keys.google.trim() === "") {
                showToast("Google API Key not set. Please configure it in Settings for the AI agents to work.", "info", 6000); // Longer duration info
