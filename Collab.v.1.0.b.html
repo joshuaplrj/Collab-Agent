@@ -936,6 +936,50 @@
           const DEFAULT_ROUNDS = 3;
           const DEFAULT_ROLES = ['leader', 'researcher', 'analyst', 'critic', 'synthesizer', 'reporter'];
 
+          // Model provider configurations
+          const MODEL_PROVIDERS = {
+            google: {
+              name: "Google Gemini",
+              apiKeyPrefix: "",
+              models: {
+                "gemini-2.0-flash-lite-001": "Flash Lite",
+                "gemini-pro": "Gemini Pro",
+                "gemini-ultra": "Gemini Ultra"
+              }
+            },
+            openai: {
+              name: "OpenAI",
+              apiKeyPrefix: "sk-",
+              models: {
+                "gpt-3.5-turbo": "GPT-3.5 Turbo",
+                "gpt-4": "GPT-4",
+                "gpt-4-turbo": "GPT-4 Turbo"
+              }
+            }
+          };
+
+          // Default provider for each role
+          const DEFAULT_PROVIDERS = {
+            "leader": "google",
+            "researcher": "google",
+            "analyst": "google",
+            "critic": "google",
+            "synthesizer": "google",
+            "reporter": "google"
+          };
+
+          // API endpoints for different providers
+          const API_ENDPOINTS = {
+            google: (model) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+            openai: () => `https://api.openai.com/v1/chat/completions`
+          };
+
+          // Default API keys for each provider
+          const DEFAULT_API_KEYS = {
+            google: GOOGLE_API_KEY,
+            openai: "YOUR_OPENAI_API_KEY" // Placeholder for OpenAI
+          };
+
           const MODEL_TYPES = {
               "leader": "gemini-2.0-flash-lite-001",
               "researcher": "gemini-2.0-flash-lite-001",
@@ -958,6 +1002,7 @@
 
           let settings = {
               api_keys: { google: GOOGLE_API_KEY },
+              model_providers: { ...DEFAULT_PROVIDERS },
               model_types: { ...MODEL_TYPES },
               system_prompts: { ...DEFAULT_SYSTEM_PROMPTS },
               max_rounds: DEFAULT_ROUNDS
@@ -996,74 +1041,96 @@
 
           // --- Helper Functions ---
 
-            async function generate_gemini_response(model_name, system_prompt, user_content) {
-                const apiKey = settings.api_keys.google;
+            async function generate_response(provider, model_name, system_prompt, user_content) {
+                // Get API key based on provider
+                const apiKey = settings.api_keys[provider];
                 if (!apiKey || apiKey === "YOUR_API_KEY" || apiKey.trim() === "") {
-                     console.error("Google API key is missing or invalid in settings.");
-                     // Use displayErrorMessage for API key issues within the chat flow
-                     // displayErrorMessage("Google API key is missing or invalid. Please configure it in Settings.", "System");
-                     return [null, "Google API key is missing or invalid. Please configure it in Settings."];
+                     console.error(`${provider} API key is missing or invalid in settings.`);
+                     return [null, `${provider.charAt(0).toUpperCase() + provider.slice(1)} API key is missing or invalid. Please configure it in Settings.`];
                 }
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/${model_name}:generateContent?key=${apiKey}`;
-                const requestBody = {
-                     contents: [{
-                         role: "user",
-                         parts: [{ text: `${system_prompt}\n\n---\n\n${user_content}` }]
-                     }],
-                     // Optional: Add safety settings and generation config if needed
-                     // safetySettings: [...],
-                     // generationConfig: { temperature: 0.7, maxOutputTokens: 2048, ... }
-                };
+
+                // Prepare request based on provider
+                let url, requestBody, headers;
+                if (provider === 'google') {
+                    url = `${API_ENDPOINTS.google(model_name)}?key=${apiKey}`;
+                    requestBody = {
+                         contents: [{
+                             role: "user",
+                             parts: [{ text: `${system_prompt}\n\n---\n\n${user_content}` }]
+                         }],
+                    };
+                    headers = { 'Content-Type': 'application/json' };
+                } else if (provider === 'openai') {
+                    url = API_ENDPOINTS.openai();
+                    requestBody = {
+                        model: model_name,
+                        messages: [
+                            { role: "system", content: system_prompt },
+                            { role: "user", content: user_content }
+                        ],
+                        temperature: 0.7,
+                        max_tokens: 2048
+                    };
+                    headers = { 
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`
+                    };
+                } else {
+                    return [null, `Unsupported provider: ${provider}`];
+                }
+
                 try {
                     const response = await fetch(url, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: headers,
                         body: JSON.stringify(requestBody),
                     });
 
                     if (!response.ok) {
                         const errorData = await response.json();
                         const errorMessage = errorData.error?.message || `HTTP error! Status: ${response.status}`;
-                        console.error(`API Error for ${model_name}:`, errorMessage, errorData);
-                        // Throw to be caught by run_agent
+                        console.error(`API Error for ${provider}/${model_name}:`, errorMessage, errorData);
                         throw new Error(`API Error (${response.status}): ${errorMessage}`);
                     }
+
                     const data = await response.json();
 
-                    // Check for content blocking
-                    if (data.promptFeedback?.blockReason) {
-                         console.warn(`Content blocked for ${model_name}: ${data.promptFeedback.blockReason}`);
-                         return [null, `Content blocked by API policy: ${data.promptFeedback.blockReason}`];
-                    }
-                     // Check for valid response content
-                    if (data.candidates && data.candidates.length > 0 && data.candidates[0].content?.parts?.length > 0) {
-                         const finishReason = data.candidates[0].finishReason;
-                         if (finishReason && !["STOP", "MAX_TOKENS"].includes(finishReason)) {
-                             console.warn(`Unusual finish reason for ${model_name}: ${finishReason}`);
-                             // Depending on the reason, might want to treat as an error or partial success
-                             if (finishReason === "SAFETY") {
-                                 return [null, "Response partially generated but stopped due to safety settings."];
+                    // Handle responses based on provider
+                    if (provider === 'google') {
+                        // Check for content blocking
+                        if (data.promptFeedback?.blockReason) {
+                             console.warn(`Content blocked for ${provider}/${model_name}: ${data.promptFeedback.blockReason}`);
+                             return [null, `Content blocked by API policy: ${data.promptFeedback.blockReason}`];
+                        }
+                        // Check for valid response content
+                        if (data.candidates && data.candidates.length > 0 && data.candidates[0].content?.parts?.length > 0) {
+                             const finishReason = data.candidates[0].finishReason;
+                             if (finishReason && !["STOP", "MAX_TOKENS"].includes(finishReason)) {
+                                 console.warn(`Unusual finish reason for ${provider}/${model_name}: ${finishReason}`);
+                                 if (finishReason === "SAFETY") {
+                                     return [null, "Response partially generated but stopped due to safety settings."];
+                                 }
                              }
+                             return [data.candidates[0].content.parts[0].text.trim(), null];
                          }
-                         return [data.candidates[0].content.parts[0].text.trim(), null]; // Success
-                     } else {
-                         // Handle cases where API returns 200 OK but no valid content (e.g., safety block without blockReason, empty response)
-                         console.warn("API returned OK but with empty or invalid response structure:", data);
-                         const blockReason = data.candidates?.[0]?.promptFeedback?.blockReason;
-                         if (blockReason) {
-                             return [null, `Content blocked by API policy: ${blockReason}`];
-                         }
-                         return [null, "No valid response content received from the API."];
-                     }
+                    } else if (provider === 'openai') {
+                        if (data.choices && data.choices.length > 0 && data.choices[0].message?.content) {
+                            return [data.choices[0].message.content.trim(), null];
+                        }
+                    }
+
+                    // Handle cases where API returns 200 OK but no valid content
+                    console.warn("API returned OK but with empty or invalid response structure:", data);
+                    return [null, "No valid response content received from the API."];
                 } catch (error) {
-                    console.error(`Error calling Gemini API for ${model_name}:`, error);
-                    // Return the error message to be displayed
+                    console.error(`Error calling ${provider} API for ${model_name}:`, error);
                     return [null, error.message || "An unexpected error occurred during the API call."];
                 }
             }
 
             async function run_agent(role, task_prompt, collaboration_state) {
                 const model_name = settings.model_types[role];
+                const provider = settings.model_providers[role] || 'google';
                 const system_prompt = settings.system_prompts[role];
                 if (!model_name || !system_prompt) {
                      const errorMsg = `Settings for role "${role}" are missing. Cannot run agent.`;
@@ -1089,7 +1156,7 @@
 
                 displayMessage(`*Tasking ${role}: ${task_prompt.substring(0, 100)}...*`, 'system'); // Display system message in chat
 
-                const [response, error] = await generate_gemini_response(model_name, system_prompt, agent_input);
+                const [response, error] = await generate_response(provider, model_name, system_prompt, agent_input);
 
                 if (error) {
                     displayErrorMessage(error, role); // Display error in the popup
@@ -1357,19 +1424,62 @@
               const apiFieldsDiv = document.createElement('div'); // Container for fields
               apiFieldsDiv.className = 'settings-fields'; // Add class if needed for styling
 
-              const apiKeyLabel = document.createElement('label');
-              apiKeyLabel.textContent = 'Google API Key';
+              // Add API key for Google
+              const googleApiKeyLabel = document.createElement('label');
+              googleApiKeyLabel.textContent = 'Google API Key';
               // Use a consistent ID format
-              apiKeyLabel.htmlFor = 'setting-api-google-key';
-              const apiKeyInput = document.createElement('input');
-              apiKeyInput.type = 'text'; // Use text initially, can change to password if desired
-              apiKeyInput.id = 'setting-api-google-key'; // Match label's htmlFor
-              apiKeyInput.value = settingsData.api_keys?.google || ''; // Safely access
-              apiKeyInput.placeholder = 'Enter your Google API Key';
+              googleApiKeyLabel.htmlFor = 'setting-api-google-key';
+              const googleApiKeyInput = document.createElement('input');
+              googleApiKeyInput.type = 'text';
+              googleApiKeyInput.id = 'setting-api-google-key'; // Match label's htmlFor
+              googleApiKeyInput.value = settingsData.api_keys?.google || ''; // Safely access
+              googleApiKeyInput.placeholder = 'Enter your Google API Key';
 
-              apiFieldsDiv.appendChild(apiKeyLabel);
-              apiFieldsDiv.appendChild(apiKeyInput);
+              apiFieldsDiv.appendChild(googleApiKeyLabel);
+              apiFieldsDiv.appendChild(googleApiKeyInput);
               apiDiv.appendChild(apiFieldsDiv);
+
+              // Add API key for OpenAI
+              const openaiApiKeyLabel = document.createElement('label');
+              openaiApiKeyLabel.textContent = 'OpenAI API Key';
+              openaiApiKeyLabel.htmlFor = 'setting-api-openai-key';
+              const openaiApiKeyInput = document.createElement('input');
+              openaiApiKeyInput.type = 'text';
+              openaiApiKeyInput.id = 'setting-api-openai-key';
+              openaiApiKeyInput.value = settingsData.api_keys?.openai || '';
+              openaiApiKeyInput.placeholder = 'Enter your OpenAI API Key';
+              apiFieldsDiv.appendChild(openaiApiKeyLabel);
+              apiFieldsDiv.appendChild(openaiApiKeyInput);
+              apiDiv.appendChild(apiFieldsDiv);
+
+              // Model Provider Selection for each role
+              DEFAULT_ROLES.forEach(role => {
+                  const providerLabel = document.createElement('label');
+                  providerLabel.textContent = `Select Model Provider for ${role}`;
+                  providerLabel.htmlFor = `provider-${role}`;
+                  const providerSelect = document.createElement('select');
+                  providerSelect.id = `provider-${role}`;
+                  providerSelect.dataset.settingType = 'model_provider'; // For easy retrieval
+                  providerSelect.dataset.role = role; // Link to role
+
+                  // Populate the provider select options
+                  Object.keys(MODEL_PROVIDERS).forEach(providerKey => {
+                      const option = document.createElement('option');
+                      option.value = providerKey;
+                      option.textContent = MODEL_PROVIDERS[providerKey].name;
+                      // Set selected based on the current default or settings
+                      if (providerKey === settingsData.model_providers?.[role] || providerKey === DEFAULT_PROVIDERS[role]) {
+                          option.selected = true;
+                      }
+                      providerSelect.appendChild(option);
+                  });
+
+                  apiFieldsDiv.appendChild(providerLabel);
+                  apiFieldsDiv.appendChild(providerSelect);
+              });
+
+              apiDiv.appendChild(apiFieldsDiv);
+
               settingsContent.appendChild(apiDiv);
               // --- End API Key Section ---
 
